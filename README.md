@@ -18,7 +18,7 @@ python3 -m pip install -U depthai
 
 ```
 cd [ros_ws]/src/
-git clone https://github.com/dennisbrar/depthai_publisher.git
+git clone https://github.com/Piaktipik/depthai_publisher.git
 ```
 
 ## Step 2 - Build Packages
