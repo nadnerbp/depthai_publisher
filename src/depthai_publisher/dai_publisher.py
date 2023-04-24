@@ -3,7 +3,7 @@
 import cv2
 
 import rospy
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, Image
 
 from cv_bridge import CvBridge, CvBridgeError
 import depthai as dai
@@ -16,11 +16,14 @@ class DepthaiCamera():
     fps = 20.0
 
     pub_topic = '/depthai_node/image/compressed'
+    pub_topic_raw = '/depthai_node/image/raw'
 
     def __init__(self):
         self.pipeline = dai.Pipeline()
-        self.pub_image = rospy.Publisher(
-            self.pub_topic, CompressedImage, queue_size=10)
+
+        # Pulbish ros image data
+        self.pub_image = rospy.Publisher(self.pub_topic, CompressedImage, queue_size=10)
+        self.pub_image_raw = rospy.Publisher(self.pub_topic_raw, Image, queue_size=10)
 
         rospy.loginfo("Publishing images to rostopic: {}".format(self.pub_topic))
 
@@ -61,8 +64,11 @@ class DepthaiCamera():
         msg_out.header.stamp = rospy.Time.now()
         msg_out.format = "jpeg"
         msg_out.data = np.array(cv2.imencode('.jpg', frame)[1]).tostring()
-
         self.pub_image.publish(msg_out)
+        # Publish image raw
+        msg_img_raw = self.br.cv2_to_imgmsg(frame, encoding="bgr8")
+        self.pub_image_raw.publish(msg_img_raw)
+        
 
     def shutdown(self):
         cv2.destroyAllWindows()
