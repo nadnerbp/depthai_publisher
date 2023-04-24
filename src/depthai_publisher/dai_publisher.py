@@ -3,7 +3,7 @@
 import cv2
 
 import rospy
-from sensor_msgs.msg import CompressedImage, Image
+from sensor_msgs.msg import CompressedImage, Image, CameraInfo
 
 from cv_bridge import CvBridge, CvBridgeError
 import depthai as dai
@@ -17,6 +17,7 @@ class DepthaiCamera():
 
     pub_topic = '/depthai_node/image/compressed'
     pub_topic_raw = '/depthai_node/image/raw'
+    pub_topic_cam_inf = '/depthai_node/camera/camera_info'
 
     def __init__(self):
         self.pipeline = dai.Pipeline()
@@ -24,12 +25,40 @@ class DepthaiCamera():
         # Pulbish ros image data
         self.pub_image = rospy.Publisher(self.pub_topic, CompressedImage, queue_size=10)
         self.pub_image_raw = rospy.Publisher(self.pub_topic_raw, Image, queue_size=10)
+        # Create a publisher for the CameraInfo topic
+        self.pub_cam_inf = rospy.Publisher(self.pub_topic_cam_inf, CameraInfo, queue_size=10)
+        # Create a timer for the callback
+        self.timer = rospy.Timer(rospy.Duration(1.0 / 10), self.publish_camera_info, oneshot=False)
 
         rospy.loginfo("Publishing images to rostopic: {}".format(self.pub_topic))
 
         self.br = CvBridge()
 
         rospy.on_shutdown(lambda: self.shutdown())
+
+    def publish_camera_info(self, timer=None):
+        # Create a publisher for the CameraInfo topic
+
+        # Create a CameraInfo message
+        camera_info_msg = CameraInfo()
+        camera_info_msg.header.frame_id = "camera_frame"
+        camera_info_msg.height = self.res[0] # Set the height of the camera image
+        camera_info_msg.width = self.res[1]   # Set the width of the camera image
+
+        # Set the camera intrinsic matrix (fx, fy, cx, cy)
+        camera_info_msg.K = [615.381, 0.0, 320.0, 0.0, 615.381, 240.0, 0.0, 0.0, 1.0]
+        # Set the distortion parameters (k1, k2, p1, p2, k3)
+        camera_info_msg.D = [-0.10818, 0.12793, 0.00000, 0.00000, -0.04204]
+        # Set the rectification matrix (identity matrix)
+        camera_info_msg.R = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        # Set the projection matrix (P)
+        camera_info_msg.P = [615.381, 0.0, 320.0, 0.0, 0.0, 615.381, 240.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+        # Set the distortion model
+        camera_info_msg.distortion_model = "plumb_bob"
+        # Set the timestamp
+        camera_info_msg.header.stamp = rospy.Time.now()
+
+        self.pub_cam_inf.publish(camera_info_msg)  # Publish the camera info message
 
     def rgb_camera(self):
         cam_rgb = self.pipeline.createColorCamera()
@@ -58,11 +87,13 @@ class DepthaiCamera():
                 frame = video.get().getCvFrame()
 
                 self.publish_to_ros(frame)
+                self.publish_camera_info()
 
     def publish_to_ros(self, frame):
         msg_out = CompressedImage()
         msg_out.header.stamp = rospy.Time.now()
         msg_out.format = "jpeg"
+        msg_out.header.frame_id = "camera"
         msg_out.data = np.array(cv2.imencode('.jpg', frame)[1]).tostring()
         self.pub_image.publish(msg_out)
         # Publish image raw
