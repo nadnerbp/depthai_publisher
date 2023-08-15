@@ -93,7 +93,7 @@ class DepthaiCamera():
         msg_out = CompressedImage()
         msg_out.header.stamp = rospy.Time.now()
         msg_out.format = "jpeg"
-        msg_out.header.frame_id = "camera"
+        msg_out.header.frame_id = "home"
         msg_out.data = np.array(cv2.imencode('.jpg', frame)[1]).tostring()
         self.pub_image.publish(msg_out)
         # Publish image raw
