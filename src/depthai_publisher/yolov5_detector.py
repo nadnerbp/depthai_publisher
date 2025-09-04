@@ -118,9 +118,9 @@ class DepthaiCamera():
   
     def publish_object_data(self, frame, detection):
         # Structure IDs based on labels to avoid class confusion, Nav uses 101 and 102 for objects, and 0 - 100 inc for arucos
-        if labels[detection.label] == "backpack":
+        if labels[detection.label] == "bag":
             object_id = 101
-        elif labels[detection.label] == 'person':
+        elif labels[detection.label] == 'human':
             object_id = 102
         else:
             rospy.logwarn("This Object Identifier is unknown")
