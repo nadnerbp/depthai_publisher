@@ -5,7 +5,7 @@ import numpy as np
 import threading
 from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
-from std_msgs.msg import Float32MultiArray, UInt8
+from std_msgs.msg import Float32MultiArray
 from collections import defaultdict, deque
 
 class ArucoDetector():
@@ -37,13 +37,10 @@ class ArucoDetector():
         self.aruco_pub_detection = rospy.Publisher(
             '/aruco_detection', Float32MultiArray, queue_size=10)
 
-        # Subscribers
+        # Subscriber (frames only; refined-pose callbacks removed)
         self.frame_sub = rospy.Subscriber(
             self.frame_sub_topic, CompressedImage, self.img_callback,
             queue_size=1, buff_size=2**24)
-
-        self.sub_pose_refined = rospy.Subscriber(
-            'refined_pose', UInt8, self.callback_refined_pose, queue_size=10)
 
         # CvBridge + threading
         self.br = CvBridge()
@@ -52,21 +49,14 @@ class ArucoDetector():
         self.new_frame_event = threading.Event()
 
         # State
-        self.published_ids = set()
-        self.coordinate_buffers = defaultdict(lambda: deque(maxlen=5))
-        self.re_estimation = defaultdict(bool)
+        self.published_ids = set()                                # one-shot publish per ID
+        self.coordinate_buffers = defaultdict(lambda: deque(maxlen=5))  # 5-frame buffer per ID
 
         # Start processing thread
         self.processing_thread = threading.Thread(target=self.process_frames, daemon=True)
         self.processing_thread.start()
 
         rospy.loginfo("Aruco Detector initialised.")
-
-    def callback_refined_pose(self, msg):
-        marker_id = msg.data
-        if marker_id < 100:
-            self.re_estimation[marker_id] = True
-            rospy.loginfo(f"Re-estimation triggered for marker ID: {marker_id}")
 
     def img_callback(self, msg_in):
         try:
@@ -111,20 +101,20 @@ class ArucoDetector():
                 # Save for averaging
                 self.coordinate_buffers[marker_id].append(pts.flatten())
 
-                # Publish when re-estimation requested
-                if self.re_estimation[marker_id]:
-                    if len(self.coordinate_buffers[marker_id]) == 5 and marker_id not in self.published_ids:
-                        avg_corners = np.mean(self.coordinate_buffers[marker_id], axis=0).reshape((4, 2))
+                # Publish after 5 frames (one-shot per ID)
+                if (len(self.coordinate_buffers[marker_id]) == 5
+                        and marker_id not in self.published_ids):
+                    avg_corners = np.mean(self.coordinate_buffers[marker_id], axis=0).reshape((4, 2))
 
-                        msg = Float32MultiArray()
-                        msg.data = [float(marker_id)] + [c for p in avg_corners for c in p]
+                    msg = Float32MultiArray()
+                    msg.data = [float(marker_id)] + [c for p in avg_corners for c in p]
 
-                        self.aruco_pub_detection.publish(msg)
-                        rospy.loginfo(f"Published ArUco detection: {msg.data}")
+                    self.aruco_pub_detection.publish(msg)
+                    rospy.loginfo(f"Published ArUco detection: {msg.data}")
 
-                        self.re_estimation[marker_id] = False
-                        self.coordinate_buffers[marker_id].clear()
-                        self.published_ids.add(marker_id)
+                    # Clear buffer and mark as published (one-shot behaviour)
+                    self.coordinate_buffers[marker_id].clear()
+                    self.published_ids.add(marker_id)
 
         return frame
 
