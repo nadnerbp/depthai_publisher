@@ -15,7 +15,7 @@ import rospy
 import tf2_ros
 import tf_conversions
 from geometry_msgs.msg import TransformStamped
-from std_msgs.msg import Float32MultiArray, UInt8
+from std_msgs.msg import Float32MultiArray
 from sensor_msgs.msg import CompressedImage, Image, CameraInfo
 from cv_bridge import CvBridge, CvBridgeError
 from collections import defaultdict, deque
@@ -75,9 +75,9 @@ class DepthaiCamera():
     def __init__(self):
         self.pipeline = dai.Pipeline()
 
-         # Input image size
+        # Input image size
         if "input_size" in nnConfig:
-            self.nn_shape_w,self.nn_shape_h=tuple(map(int, nnConfig.get("input_size").split('x')))
+            self.nn_shape_w, self.nn_shape_h = tuple(map(int, nnConfig.get("input_size").split('x')))
 
         # Pulbish ROS image data
         self.pub_image = rospy.Publisher(self.pub_topic, CompressedImage, queue_size=10)
@@ -87,35 +87,18 @@ class DepthaiCamera():
         self.pub_object_detect = rospy.Publisher(self.pub_topic_objects, Float32MultiArray, queue_size=10)
         # Create a publisher for the CameraInfo topic
         self.pub_cam_inf = rospy.Publisher(self.pub_topic_cam_inf, CameraInfo, queue_size=10)
-        # Subscribe to the refined pose request
-        self.sub_refined_pose = rospy.Subscriber('refined_pose', UInt8, self.callback_refined_pose)
+
         # Create a timer for the callback
         self.timer = rospy.Timer(rospy.Duration(1.0 / 10), self.publish_camera_info, oneshot=False)
 
         self.br = CvBridge()
         self.published_objects = set()
-        self.re_estimation = defaultdict(lambda: deque(maxlen=5))
-        self.avg_corners_cache = {}  # Cache for storing the last calculated average corners
+
         # Keep Unique IDs after 5 counts
         self.coordinate_buffers = defaultdict(lambda: deque(maxlen=5))
 
-        # Trigger second pose values
-        self.refined_pose = defaultdict(lambda: False)
         rospy.loginfo("Publishing to all topics initialised")
-        #rospy.on_shutdown(lambda: self.shutdown())
 
-    def callback_refined_pose(self, msg):
-        class_ID = msg.data
-        rospy.loginfo(f"Received refined pose request for Object Class: {class_ID}")
-
-        # Clear the buffer and reset detection for re-estimation
-        if class_ID in self.avg_corners_cache:
-            rospy.loginfo(f"Clearing buffer and retriggering detection for Object Class: {class_ID}")
-            self.coordinate_buffers[class_ID].clear()
-            self.published_objects.discard(class_ID)  # Allow re-publication after re-detection
-
-
-  
     def publish_object_data(self, frame, detection):
         # Structure IDs based on labels to avoid class confusion, Nav uses 101 and 102 for objects, and 0 - 100 inc for arucos
         if labels[detection.label] == "bag":
@@ -145,24 +128,18 @@ class DepthaiCamera():
         self.coordinate_buffers[object_id].append(corners.flatten())
 
         if len(self.coordinate_buffers[object_id]) == 5 and object_id not in self.published_objects:
-            # Compute average coordinates
+            # Compute average coordinates across buffered frames
             avg_corners = np.mean(self.coordinate_buffers[object_id], axis=0).reshape((4, 2))
 
-            # Cache the average corners for potential re-estimation
-            # self.avg_corners_cache[object_id] = (avg_corners, marker_length_x, marker_length_y)
-            
             # Publish Object box data and coordinates 
             object_detection_msg = Float32MultiArray()
             object_detection_msg.data = [float(object_id)] + [coord for point in avg_corners for coord in point] + [marker_length_x, marker_length_y]
- 
+
             self.pub_object_detect.publish(object_detection_msg)
             rospy.loginfo("Found Target: {}".format(labels[detection.label]))
             rospy.loginfo("Published Object Identity and Coordinates for: {}".format(object_detection_msg.data[0]))
 
-            #os.system(f"espeak 'Detected Target: {labels[detection.label]}'")  # Use espeak to speak the ID
-            #rospy.loginfo("Target detected: {}".format(labels[detection.label]))
-            
-            # Mark objects as published
+            # Mark objects as published (one-shot behaviour)
             self.published_objects.add(object_id)
             self.coordinate_buffers[object_id].clear()
 
@@ -243,11 +220,11 @@ class DepthaiCamera():
                 else:
                     print("Cam Image empty, trying again...")
                     continue
-                
+
                 if inDet is not None:
                     detections = inDet.detections
                     for detection in detections:
-                        # Publish the object Id
+                        # Publish the object Id after X buffered frames
                         self.publish_object_data(frame, detection)
                     found_classes = np.unique(found_classes)
                     overlay = self.show_yolo(frame, detections)
@@ -264,8 +241,8 @@ class DepthaiCamera():
                     self.publish_camera_info()
 
                 ## Function to compute FPS
-                counter+=1
-                if (time.time() - start_time) > 1 :
+                counter += 1
+                if (time.time() - start_time) > 1:
                     fps = counter / (time.time() - start_time)
                     counter = 0
                     start_time = time.time()
@@ -275,8 +252,8 @@ class DepthaiCamera():
         msg_out = CompressedImage()
         msg_out.header.stamp = rospy.Time.now()
         msg_out.format = "jpeg"
-        msg_out.header.frame_id = "home"
-        msg_out.data = np.array(cv2.imencode('.jpg', frame)[1]).tostring()
+        msg_out.header.frame_id = "camera"
+        msg_out.data = np.array(cv2.imencode('.jpg', frame)[1]).tobytes()
         self.pub_image.publish(msg_out)
         # Publish image raw
         msg_img_raw = self.br.cv2_to_imgmsg(frame, encoding="bgr8")
@@ -286,8 +263,8 @@ class DepthaiCamera():
         msg_out = CompressedImage()
         msg_out.header.stamp = rospy.Time.now()
         msg_out.format = "jpeg"
-        msg_out.header.frame_id = "home"
-        msg_out.data = np.array(cv2.imencode('.jpg', frame)[1]).tostring()
+        msg_out.header.frame_id = "camera"
+        msg_out.data = np.array(cv2.imencode('.jpg', frame)[1]).tobytes()
         self.pub_image_detect.publish(msg_out)
         
     ############################### Functions ###############################
@@ -300,7 +277,7 @@ class DepthaiCamera():
 
     def show_yolo(self, frame, detections):
         # Both YoloDetectionNetwork and MobileNetDetectionNetwork output this message. This message contains a list of detections, which contains label, confidence, and the bounding box information (xmin, ymin, xmax, ymax).
-        overlay =  frame.copy()
+        overlay = frame.copy()
         for detection in detections:
             bbox = self.frameNorm(overlay, (detection.xmin, detection.ymin, detection.xmax, detection.ymax))
             class_id = detection.label
@@ -335,11 +312,7 @@ class DepthaiCamera():
         # Define a source - color camera
         if cam_source == 'rgb':
             cam = pipeline.create(dai.node.ColorCamera)
-            # current_fov = cam.getFov()
-            # print(f"Current FOV: {current_fov}")
-            # cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-            # cam.setIspScale(1,1)
-            cam.setPreviewSize(self.nn_shape_w,self.nn_shape_h)
+            cam.setPreviewSize(self.nn_shape_w, self.nn_shape_h)
             cam.setInterleaved(False)
             cam.preview.link(detection_nn.input)
             cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
@@ -356,7 +329,7 @@ class DepthaiCamera():
 
         if cam_source != 'rgb':
             manip = pipeline.create(dai.node.ImageManip)
-            manip.setResize(self.nn_shape_w,self.nn_shape_h)
+            manip.setResize(self.nn_shape_w, self.nn_shape_h)
             manip.setKeepAspectRatio(True)
             # manip.setFrameType(dai.RawImgFrame.Type.BGR888p)
             manip.setFrameType(dai.RawImgFrame.Type.RGB888p)
@@ -383,9 +356,6 @@ class DepthaiCamera():
 
 # Main Code
 def main():
-    # global speak_pub 
-# Set up the publisher for spoken text on the 'spoken_text' topic
-    #speak_pub = rospy.Publisher('spoken_text', String, queue_size=10)
     rospy.init_node('depthai_node')
     dai_cam = DepthaiCamera()
     while not rospy.is_shutdown():
